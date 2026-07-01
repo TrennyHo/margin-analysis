@@ -16,6 +16,12 @@ from flask import Flask, render_template, request, jsonify
 
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
+# ── 載入打包字型（確保 Render 等 Linux 環境顯示中文）──────
+import matplotlib.font_manager as _fm
+_FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "wqy-microhei.ttc")
+if os.path.exists(_FONT_PATH):
+    _fm.fontManager.addfont(_FONT_PATH)
+
 app = Flask(__name__)
 
 MONTHS  = 8
@@ -231,7 +237,7 @@ def tight_ylim_zero(ax, series, margin=0.15):
 
 # ── 共用畫布設定（可指定格數）──────────────────────────
 def _base_fig(title, n_panels=4, height_ratios=None):
-    plt.rcParams["font.family"] = ["Heiti TC","PingFang HK","STHeiti","Noto Sans CJK TC","Noto Sans CJK SC","WenQuanYi Zen Hei","sans-serif"]
+    plt.rcParams["font.family"] = ["WenQuanYi Micro Hei","Heiti TC","PingFang HK","STHeiti","Noto Sans CJK TC","Noto Sans CJK SC","WenQuanYi Zen Hei","sans-serif"]
     plt.rcParams["axes.unicode_minus"] = False
     BG, GRID = "#0e1117", "#2a2d3e"
     if height_ratios is None:
