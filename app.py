@@ -143,6 +143,8 @@ def fetch_margin(stock_no, _trade_dates=None):
     df["融資融券比"]   = pd.to_numeric(df["MarginLoanStockLoanRate"], errors="coerce")
     df["收盤價"]       = pd.to_numeric(df["ClosePr"], errors="coerce")
     df = df.sort_values("date").reset_index(drop=True)
+    df["MA5"]  = df["收盤價"].rolling(5).mean()
+    df["MA20"] = df["收盤價"].rolling(20).mean()
 
     # 日變化 = 餘額逐日差分（歷史期間）
     df["融資日變化"] = df["融資今日餘額"].diff()
@@ -258,7 +260,7 @@ def _base_fig(title, n_panels=4, height_ratios=None):
 LEG_KW = dict(loc="upper left", fontsize=11, facecolor="#1a1d2e", labelcolor="white", framealpha=0.85, edgecolor="#4a4d5e")
 
 # ── 個股圖 ────────────────────────────────────────────
-def make_stock_chart(stock_no, stock_name, df_p, df_m):
+def make_stock_chart(stock_no, stock_name, df_m):
     df = df_m.dropna(subset=["融資今日餘額"]).copy()
     if df.empty:
         return None
@@ -270,10 +272,10 @@ def make_stock_chart(stock_no, stock_name, df_p, df_m):
     ax1, ax2, ax3, ax4, ax5 = axes_list
     dates = df["date"]
 
-    # ── Panel 1：股價（TWSE 日線）──
-    ax1.plot(df_p["date"], df_p["收盤價"], color="#4fc3f7", lw=1.2, label="收盤價")
-    ax1.plot(df_p["date"], df_p["MA5"],   color="#ffb74d", lw=0.9, ls="--", label="MA5")
-    ax1.plot(df_p["date"], df_p["MA20"],  color="#81c784", lw=0.9, ls="--", label="MA20")
+    # ── Panel 1：股價（CMoney，與融資同樣 120 天）──
+    ax1.plot(dates, df["收盤價"], color="#4fc3f7", lw=1.2, label="收盤價")
+    ax1.plot(dates, df["MA5"],   color="#ffb74d", lw=0.9, ls="--", label="MA5")
+    ax1.plot(dates, df["MA20"],  color="#81c784", lw=0.9, ls="--", label="MA20")
     ax1.set_ylabel("股價", color="white", fontsize=10)
     ax1.legend(**LEG_KW)
 
@@ -328,8 +330,9 @@ def make_stock_chart(stock_no, stock_name, df_p, df_m):
     rate_str  = f"{last['融資比率']:.2f}%"   if pd.notna(last.get("融資比率")) else "—"
     qr_str    = f"{last['券資比']:.2f}%"     if pd.notna(last.get("券資比"))   else "—"
     short_str = f"{last['融券今日餘額']:,.0f}" if pd.notna(last.get("融券今日餘額")) else "—"
+    close_val = last['收盤價'] if pd.notna(last.get('收盤價')) else 0
     fig.text(0.5, 0.002,
-             f"最新：{last['date'].strftime('%Y/%m/%d')}　收盤 {last['收盤價']:.1f}　"
+             f"最新：{last['date'].strftime('%Y/%m/%d')}　收盤 {close_val:.1f}　"
              f"融資 {last['融資今日餘額']:,.0f} 張（{rate_str}）　"
              f"融券 {short_str} 張　券資比 {qr_str}",
              ha="center", color="#aaaaaa", fontsize=11)
@@ -444,24 +447,21 @@ def analyze():
             return jsonify(error=f"找不到「{query}」，請確認名稱或改用代碼"), 404
         stock_no, stock_name = result
 
-    df_price = fetch_price(stock_no)
-    if df_price.empty:
-        return jsonify(error=f"{stock_no} 無股價資料（可能為上櫃股或代碼有誤）"), 404
     df_margin = fetch_margin(stock_no)
     if df_margin.empty:
         return jsonify(error=f"{stock_no} 無融資資料（ETF 或無融資資格）"), 404
 
-    img = make_stock_chart(stock_no, stock_name, df_price, df_margin)
+    img = make_stock_chart(stock_no, stock_name, df_margin)
     if img is None:
         return jsonify(error="圖表產生失敗"), 500
 
     last  = df_margin.iloc[-1]
-    plast = df_price.iloc[-1]
     rate  = last.get("融資比率")
     lim   = last.get("融資限額")
+    close = last.get("收盤價", 0)
     stats = {
         "date":        last["date"].strftime("%Y/%m/%d"),
-        "close":       f"{plast['收盤價']:.1f}",
+        "close":       f"{close:.1f}" if pd.notna(close) else "—",
         "margin_bal":  f"{last['融資今日餘額']:,.0f}",
         "margin_lim":  f"{lim:,.0f}" if pd.notna(lim) else "—",
         "margin_rate": f"{rate:.2f}"  if pd.notna(rate) else "—",
