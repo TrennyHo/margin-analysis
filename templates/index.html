@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>融資分析工具</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0e1117;
+    color: #e0e0e0;
+    font-family: "Heiti TC", "PingFang HK", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 20px;
+  }
+  h1 {
+    font-size: 1.6rem;
+    color: #4fc3f7;
+    margin-bottom: 6px;
+    letter-spacing: 2px;
+  }
+  .subtitle { color: #555; font-size: 0.85rem; margin-bottom: 32px; }
+
+  .search-box {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    max-width: 500px;
+    margin-bottom: 32px;
+  }
+  .search-box input {
+    flex: 1;
+    padding: 13px 18px;
+    background: #1a1d2e;
+    border: 1px solid #2a2d3e;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 1.1rem;
+    outline: none;
+    transition: border 0.2s;
+  }
+  .search-box input:focus { border-color: #4fc3f7; }
+  .search-box input::placeholder { color: #444; }
+  .search-box button {
+    padding: 13px 26px;
+    background: #4fc3f7;
+    color: #0e1117;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .search-box button:hover { background: #81d4fa; }
+  .search-box button:disabled { background: #2a2d3e; color: #555; cursor: not-allowed; }
+
+  /* 快捷按鈕 */
+  .shortcuts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    max-width: 500px;
+    width: 100%;
+    margin-bottom: 32px;
+    justify-content: center;
+  }
+  .shortcuts button {
+    padding: 6px 14px;
+    background: #1a1d2e;
+    border: 1px solid #2a2d3e;
+    border-radius: 20px;
+    color: #aaa;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .shortcuts button:hover { border-color: #4fc3f7; color: #4fc3f7; }
+
+  /* 載入中 */
+  .spinner {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    margin: 30px 0;
+  }
+  .spinner.active { display: flex; }
+  .spin-ring {
+    width: 44px; height: 44px;
+    border: 3px solid #2a2d3e;
+    border-top-color: #4fc3f7;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner p { color: #555; font-size: 0.9rem; }
+
+  /* 錯誤 */
+  .error-box {
+    display: none;
+    background: #2d1a1a;
+    border: 1px solid #8b0000;
+    border-radius: 8px;
+    padding: 14px 20px;
+    color: #ef5350;
+    max-width: 500px;
+    width: 100%;
+    margin-bottom: 20px;
+  }
+  .error-box.active { display: block; }
+
+  /* 統計卡片 */
+  .stats-row {
+    display: none;
+    flex-wrap: wrap;
+    gap: 12px;
+    max-width: 900px;
+    width: 100%;
+    margin-bottom: 20px;
+    justify-content: center;
+  }
+  .stats-row.active { display: flex; }
+  .stat-card {
+    background: #1a1d2e;
+    border: 1px solid #2a2d3e;
+    border-radius: 10px;
+    padding: 14px 20px;
+    text-align: center;
+    min-width: 130px;
+  }
+  .stat-card .label { color: #555; font-size: 0.75rem; margin-bottom: 4px; }
+  .stat-card .value { color: #fff; font-size: 1.15rem; font-weight: bold; }
+  .stat-card.risk-high .value  { color: #ef5350; }
+  .stat-card.risk-mid  .value  { color: #ffb74d; }
+  .stat-card.risk-low  .value  { color: #26a69a; }
+
+  /* 圖表 */
+  .chart-wrap {
+    display: none;
+    max-width: 960px;
+    width: 100%;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #2a2d3e;
+  }
+  .chart-wrap.active { display: block; }
+  .chart-wrap img { width: 100%; display: block; }
+
+  .stock-title {
+    display: none;
+    font-size: 1.1rem;
+    color: #81c784;
+    margin-bottom: 12px;
+    font-weight: bold;
+  }
+  .stock-title.active { display: block; }
+</style>
+</head>
+<body>
+
+<h1>融資分析工具</h1>
+<p class="subtitle">輸入股票代碼或名稱，自動抓取 TWSE 融資資料並繪圖</p>
+
+<div class="search-box">
+  <input id="query" type="text" placeholder="例：2330 或 台積電" autocomplete="off"
+         onkeydown="if(event.key==='Enter') doSearch()">
+  <button id="btn" onclick="doSearch()">查詢</button>
+</div>
+
+<div class="shortcuts">
+  <button onclick="quickSearch('大盤')" style="border-color:#4fc3f7;color:#4fc3f7;">大盤</button>
+  <button onclick="quickSearch('2330')">2330 台積電</button>
+  <button onclick="quickSearch('2317')">2317 鴻海</button>
+  <button onclick="quickSearch('6770')">6770 力積電</button>
+  <button onclick="quickSearch('2454')">2454 聯發科</button>
+  <button onclick="quickSearch('3008')">3008 大立光</button>
+  <button onclick="quickSearch('2603')">2603 長榮</button>
+</div>
+
+<div class="error-box" id="errBox"></div>
+
+<div class="spinner" id="spinner">
+  <div class="spin-ring"></div>
+  <p id="spinMsg">資料抓取中，約需 20~30 秒...</p>
+</div>
+
+<div class="stock-title" id="stockTitle"></div>
+
+<div class="stats-row" id="statsRow">
+  <div class="stat-card"><div class="label">最新日期</div><div class="value" id="s-date">—</div></div>
+  <div class="stat-card"><div class="label">收盤價</div><div class="value" id="s-close">—</div></div>
+  <div class="stat-card"><div class="label">融資餘額</div><div class="value" id="s-bal">—</div></div>
+  <div class="stat-card"><div class="label">融資限額</div><div class="value" id="s-lim">—</div></div>
+  <div class="stat-card"><div class="label">融資比率</div><div class="value" id="s-rate">—</div></div>
+  <div class="stat-card"><div class="label">融資日變化</div><div class="value" id="s-chg">—</div></div>
+  <div class="stat-card"><div class="label">融券餘額</div><div class="value" id="s-short">—</div></div>
+  <div class="stat-card" id="s-risk-card"><div class="label">融資風險</div><div class="value" id="s-risk">—</div></div>
+</div>
+
+<div class="chart-wrap" id="chartWrap">
+  <img id="chartImg" src="" alt="融資分析圖">
+</div>
+
+<script>
+function quickSearch(code) {
+  document.getElementById("query").value = code;
+  doSearch();
+}
+
+async function doSearch() {
+  const query = document.getElementById("query").value.trim();
+  if (!query) return;
+
+  const btn = document.getElementById("btn");
+  btn.disabled = true;
+
+  document.getElementById("errBox").classList.remove("active");
+  document.getElementById("statsRow").classList.remove("active");
+  document.getElementById("chartWrap").classList.remove("active");
+  document.getElementById("stockTitle").classList.remove("active");
+  document.getElementById("spinner").classList.add("active");
+
+  try {
+    const res = await fetch("/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query })
+    });
+    const data = await res.json();
+
+    document.getElementById("spinner").classList.remove("active");
+
+    if (!res.ok) {
+      document.getElementById("errBox").textContent = data.error || "發生錯誤";
+      document.getElementById("errBox").classList.add("active");
+      return;
+    }
+
+    // 股票標題
+    const title = document.getElementById("stockTitle");
+    title.textContent = `${data.code}  ${data.name}`;
+    title.classList.add("active");
+
+    // 統計
+    const s = data.stats;
+    document.getElementById("s-date").textContent  = s.date;
+    document.getElementById("s-close").textContent = s.close + " 元";
+    document.getElementById("s-bal").textContent   = s.margin_bal + " 張";
+    document.getElementById("s-lim").textContent   = s.margin_lim + " 張";
+    document.getElementById("s-rate").textContent  = s.margin_rate + " %";
+    document.getElementById("s-chg").textContent   = s.margin_chg + " 張";
+    document.getElementById("s-short").textContent = s.short_bal + " 張";
+    document.getElementById("s-risk").textContent  = s.risk + "風險";
+
+    const riskCard = document.getElementById("s-risk-card");
+    riskCard.className = "stat-card " +
+      (s.risk === "高" ? "risk-high" : s.risk === "中" ? "risk-mid" : "risk-low");
+
+    document.getElementById("statsRow").classList.add("active");
+
+    // 圖表
+    document.getElementById("chartImg").src = "data:image/png;base64," + data.chart;
+    document.getElementById("chartWrap").classList.add("active");
+
+  } catch(e) {
+    document.getElementById("spinner").classList.remove("active");
+    document.getElementById("errBox").textContent = "網路錯誤：" + e.message;
+    document.getElementById("errBox").classList.add("active");
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>
