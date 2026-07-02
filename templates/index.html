@@ -223,6 +223,7 @@ async function doSearch() {
   document.getElementById("chartWrap").classList.remove("active");
   document.getElementById("stockTitle").classList.remove("active");
   document.getElementById("spinner").classList.add("active");
+  document.body.style.cursor = "wait";
 
   try {
     const res = await fetch("/analyze", {
@@ -272,6 +273,7 @@ async function doSearch() {
     document.getElementById("errBox").classList.add("active");
   } finally {
     btn.disabled = false;
+    document.body.style.cursor = "";
   }
 }
 </script>
