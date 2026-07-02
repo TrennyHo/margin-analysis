@@ -24,10 +24,9 @@ if os.path.exists(_FONT_PATH):
 
 app = Flask(__name__)
 
-MONTHS  = 8
+MONTHS  = 5
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 MARKET_KEYWORDS = {"大盤","加權","twii","taiex","市場","大盤指數","加權指數"}
-CMONEY_KEY = "Gj0F%2F1aMSx5gFKJnl14JRQ%3D%3D"
 
 # ── 股票清單（名稱 ↔ 代碼）─────────────────────────────
 _stock_map: dict[str, str] = {}
@@ -125,102 +124,103 @@ def fetch_taiex():
     df["MA20"] = df["指數"].rolling(20).mean()
     return df
 
-# ── 個股融資（CMoney 真實歷史 120 天）────────────────
-def fetch_margin(stock_no, _trade_dates=None):
-    H = {**HEADERS, "Referer": f"https://www.cmoney.tw/finance/{stock_no}/f00037"}
-    base = "https://www.cmoney.tw/finance/ashx/mainpage.ashx"
-    try:
-        hist = requests.get(
-            f"{base}?action=GetStockMarginTradingHistory&stockId={stock_no}&cmkey={CMONEY_KEY}",
-            headers=H, timeout=15, verify=False).json()
-        info = requests.get(
-            f"{base}?action=GetStockMarginTradingInfo&stockId={stock_no}&cmkey={CMONEY_KEY}",
-            headers=H, timeout=15, verify=False).json()
-    except Exception:
+# ── 個股融資（TWSE openAPI，全球可存取）────────────────
+def fetch_margin(stock_no):
+    from concurrent.futures import ThreadPoolExecutor, as_completed as _ac
+
+    # 先取股價資料（同時獲得交易日清單）
+    df_price = fetch_price(stock_no)
+    if df_price.empty:
+        return pd.DataFrame()
+    trade_dates = df_price["date"].tolist()
+
+    def _n(s):
+        return pd.to_numeric(str(s).replace(",", ""), errors="coerce")
+
+    def _fetch_day(dt):
+        ymd = dt.strftime("%Y%m%d")
+        url = (f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN"
+               f"?response=json&date={ymd}&selectType=STOCK")
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=12)
+            d = r.json()
+            tables = d.get("tables", [])
+            data = tables[1].get("data", []) if len(tables) > 1 else []
+            for row in data:
+                if row[0] == stock_no:
+                    # row: [代號,名稱,融資買進,融資賣出,現金償還,融資前日餘額,融資今日餘額,融資限額,
+                    #        融券買進,融券賣出,現券償還,融券前日餘額,融券今日餘額,融券限額,資券互抵,註記]
+                    return dt, (_n(row[6]), _n(row[7]), _n(row[12]), _n(row[13]))
+        except Exception:
+            pass
+        return dt, None
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        fts = {ex.submit(_fetch_day, dt): dt for dt in trade_dates}
+        for f in _ac(fts):
+            dt, vals = f.result()
+            if vals:
+                results[dt] = vals
+
+    if not results:
         return pd.DataFrame()
 
-    if not isinstance(hist, list) or not hist:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(hist)
-    df["date"]         = pd.to_datetime(df["Date"], format="%Y%m%d")
-    df["融資今日餘額"] = pd.to_numeric(df["MarginLoanBalance"], errors="coerce")
-    df["融券今日餘額"] = pd.to_numeric(df["StockLoanBalance"], errors="coerce")
-    df["融資融券比"]   = pd.to_numeric(df["MarginLoanStockLoanRate"], errors="coerce")
-    df["收盤價"]       = pd.to_numeric(df["ClosePr"], errors="coerce")
-    df = df.sort_values("date").reset_index(drop=True)
-    df["MA5"]  = df["收盤價"].rolling(5).mean()
-    df["MA20"] = df["收盤價"].rolling(20).mean()
-
-    # 日變化 = 餘額逐日差分（歷史期間）
-    df["融資日變化"] = df["融資今日餘額"].diff()
-    df["融券日變化"] = df["融券今日餘額"].diff()
-
-    # Info 提供最近 5 天更精確的日變化與使用率
-    if isinstance(info, list) and info:
-        idf = pd.DataFrame(info)
-        idf["date"]         = pd.to_datetime(idf["Date"], format="%Y%m%d")
-        idf["_chg"]         = pd.to_numeric(idf["MarginLoanFluctuation"], errors="coerce")
-        idf["_rate"]        = pd.to_numeric(idf["MarginLoanUsageRate"], errors="coerce")
-        df = df.merge(idf[["date","_chg","_rate"]], on="date", how="left")
-        mask = df["_chg"].notna()
-        df.loc[mask, "融資日變化"] = df.loc[mask, "_chg"]
-
-        # 以最新餘額+使用率反推融資限額，再計算全段歷史使用率
-        latest = df.dropna(subset=["_rate"]).iloc[-1]
-        limit = latest["融資今日餘額"] / (latest["_rate"] / 100)
-        df["融資限額"] = round(limit)
-        df["融資比率"] = (df["融資今日餘額"] / limit * 100).round(2)
-        df.drop(columns=["_chg","_rate"], inplace=True)
-    else:
-        df["融資限額"] = float("nan")
-        df["融資比率"] = float("nan")
-
-    # 券資比（融券/融資，百分比）
-    df["券資比"] = (df["融券今日餘額"] / df["融資今日餘額"] * 100).round(2)
-
-    return df.dropna(subset=["融資今日餘額"]).reset_index(drop=True)
-
-# ── 大盤融資（CMoney 抓加權前15大成份股加總）─────────
-MARKET_BASKET = ["2330","2454","2317","2308","2382","2303","2412","2882","1301","1303",
-                 "2881","3711","2891","6505","2002"]
-
-def fetch_market_margin(_trade_dates=None):
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    dfs: dict[str, pd.DataFrame] = {}
-
-    def _fetch(code):
-        return code, fetch_margin(code)
-
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        futures = {ex.submit(_fetch, c): c for c in MARKET_BASKET}
-        for f in as_completed(futures):
-            code, df = f.result()
-            if not df.empty:
-                dfs[code] = df
-
-    if not dfs:
-        return pd.DataFrame()
-
-    # 取所有股票共同有資料的日期，逐日加總
-    all_dates = sorted(set().union(*[set(df["date"]) for df in dfs.values()]))
-    rows = []
-    for d in all_dates:
-        bal, chg, short = 0.0, 0.0, 0.0
-        for df in dfs.values():
-            r = df[df["date"] == d]
-            if r.empty:
-                continue
-            r = r.iloc[0]
-            bal   += float(r.get("融資今日餘額", 0) or 0)
-            short += float(r.get("融券今日餘額", 0) or 0)
-            c = r.get("融資日變化", float("nan"))
-            if pd.notna(c):
-                chg += float(c)
-        rows.append({"date": d, "融資餘額": bal, "融資日變化": chg, "融券餘額": short})
+    rows = [{"date": dt,
+             "融資今日餘額": v[0],
+             "融資限額":    v[1],
+             "融券今日餘額": v[2],
+             "融券限額":    v[3],
+             } for dt, v in sorted(results.items())]
 
     df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
-    df["融資萬張"] = (df["融資餘額"] / 1e4).round(2)
+    df["融資日變化"] = df["融資今日餘額"].diff()
+    df["融券日變化"] = df["融券今日餘額"].diff()
+    df["融資比率"]  = (df["融資今日餘額"] / df["融資限額"] * 100).round(2)
+    df["券資比"]    = (df["融券今日餘額"] / df["融資今日餘額"] * 100).round(2)
+
+    # 合併股價（收盤價 / MA5 / MA20）
+    df = df.merge(df_price[["date", "收盤價", "MA5", "MA20"]], on="date", how="left")
+    return df.dropna(subset=["融資今日餘額"]).reset_index(drop=True)
+
+# ── 大盤融資（TWSE 官方市場總計，全球可存取）─────────
+def fetch_market_margin(trade_dates):
+    from concurrent.futures import ThreadPoolExecutor, as_completed as _ac
+
+    def _fetch_day(dt):
+        ymd = dt.strftime("%Y%m%d")
+        url = (f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN"
+               f"?response=json&date={ymd}")
+        try:
+            d = requests.get(url, headers=HEADERS, timeout=12).json()
+            if d.get("stat") == "OK" and d.get("tables"):
+                data = d["tables"][0].get("data", [])
+                if len(data) >= 2:
+                    # fields: 項目, 買進, 賣出, 現金(券)償還, 前日餘額, 今日餘額
+                    margin = pd.to_numeric(str(data[0][5]).replace(",", ""), errors="coerce")
+                    short  = pd.to_numeric(str(data[1][5]).replace(",", ""), errors="coerce")
+                    if pd.notna(margin):
+                        return dt, margin, short
+        except Exception:
+            pass
+        return dt, None, None
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        fts = {ex.submit(_fetch_day, dt): dt for dt in trade_dates}
+        for f in _ac(fts):
+            dt, margin, short = f.result()
+            if margin is not None:
+                results[dt] = (margin, short or 0)
+
+    if not results:
+        return pd.DataFrame()
+
+    rows = [{"date": dt, "融資餘額": v[0], "融券餘額": v[1]}
+            for dt, v in sorted(results.items())]
+    df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+    df["融資日變化"] = df["融資餘額"].diff()
+    df["融資萬張"]  = (df["融資餘額"] / 1e4).round(2)
     return df
 
 # ── 畫圖共用：緊縮 Y 軸（讓變化看得見）─────────────
@@ -350,9 +350,8 @@ def make_market_chart(df_idx, df_m):
     if df.empty:
         return None
 
-    n_stocks = len(MARKET_BASKET)
     fig, axes_m, BG, GRID = _base_fig(
-        f"大盤融資分析  加權指數 × 前{n_stocks}大成份股融資加總  （近 {len(df)} 個交易日）"
+        f"大盤融資分析  加權指數 × 全市場融資總計  （近 {len(df)} 個交易日）"
     )
     ax1, ax2, ax3, ax4 = axes_m
     dates = df["date"]
@@ -365,7 +364,7 @@ def make_market_chart(df_idx, df_m):
     ax1.legend(**LEG_KW)
 
     # ── Panel 2：成份股融資餘額加總 ──
-    ax2.plot(dates, df["融資萬張"], color="#42a5f5", lw=1.8, label=f"融資餘額（萬張，{n_stocks}股合計）")
+    ax2.plot(dates, df["融資萬張"], color="#42a5f5", lw=1.8, label="融資餘額（萬張，全市場）")
     tight_ylim(ax2, df["融資萬張"], margin=0.2)
     ax2.set_ylabel("融資餘額（萬張）", color="#42a5f5", fontsize=11)
     ax2.yaxis.set_tick_params(labelcolor="#42a5f5")
@@ -391,12 +390,11 @@ def make_market_chart(df_idx, df_m):
     last = df.iloc[-1]
     idx_last = df_idx.iloc[-1]
     chg_last = last.get("融資日變化", float("nan"))
-    fig.text(0.5, 0.002,
-             f"最新：{last['date'].strftime('%Y/%m/%d')}　"
-             f"加權 {idx_last['指數']:,.2f}　"
-             f"{len(MARKET_BASKET)}大股融資合計 {last['融資萬張']:.2f} 萬張　"
-             f"日變化 {chg_last:+,.0f} 張" if pd.notna(chg_last) else "",
-             ha="center", color="#aaaaaa", fontsize=11)
+    footer = (f"最新：{last['date'].strftime('%Y/%m/%d')}　"
+              f"加權 {idx_last['指數']:,.2f}　"
+              f"全市場融資合計 {last['融資萬張']:.2f} 萬張　"
+              f"日變化 {chg_last:+,.0f} 張" if pd.notna(chg_last) else "")
+    fig.text(0.5, 0.002, footer, ha="center", color="#aaaaaa", fontsize=11)
     return _fig_to_b64(fig, BG)
 
 def _fig_to_b64(fig, bg):
@@ -422,7 +420,7 @@ def analyze():
         df_idx = fetch_taiex()
         if df_idx.empty:
             return jsonify(error="無法取得加權指數資料"), 404
-        df_m = fetch_market_margin()
+        df_m = fetch_market_margin(df_idx["date"].tolist())
         if df_m.empty:
             return jsonify(error="無法取得大盤融資資料"), 404
         img = make_market_chart(df_idx, df_m)
@@ -434,13 +432,13 @@ def analyze():
             "date":        last["date"].strftime("%Y/%m/%d"),
             "close":       f"{df_idx.iloc[-1]['指數']:,.2f}",
             "margin_bal":  f"{last['融資萬張']:.1f} 萬",
-            "margin_lim":  f"{len(MARKET_BASKET)} 支成份股合計",
+            "margin_lim":  "全市場總計",
             "margin_rate": "—",
             "margin_chg":  f"{chg:+,.0f}" if pd.notna(chg) else "—",
             "short_bal":   f"{last['融券餘額']/1e4:.2f} 萬",
             "risk":        "—",
         }
-        return jsonify(chart=img, stats=stats, name=f"前{len(MARKET_BASKET)}大成份股", code="大盤")
+        return jsonify(chart=img, stats=stats, name="全市場融資總計", code="大盤")
 
     # 個股模式
     if query.isdigit():
