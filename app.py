@@ -272,13 +272,13 @@ def make_stock_chart(stock_no, stock_name, df_m):
         return None
 
     fig, axes_list, BG, GRID = _base_fig(
-        f"融資分析  {stock_no} {stock_name}  （近 {len(df)} 個交易日，資料來源 CMoney）",
+        f"融資分析  {stock_no} {stock_name}  （近 {len(df)} 個交易日，資料來源 TWSE）",
         n_panels=5
     )
     ax1, ax2, ax3, ax4, ax5 = axes_list
     dates = df["date"]
 
-    # ── Panel 1：股價（CMoney，與融資同樣 120 天）──
+    # ── Panel 1：股價（TWSE STOCK_DAY）──
     ax1.plot(dates, df["收盤價"], color="#4fc3f7", lw=1.2, label="收盤價")
     ax1.plot(dates, df["MA5"],   color="#ffb74d", lw=0.9, ls="--", label="MA5")
     ax1.plot(dates, df["MA20"],  color="#81c784", lw=0.9, ls="--", label="MA20")
